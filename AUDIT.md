@@ -218,7 +218,7 @@ JWT_SECRET=pleader_ai_jwt_secret_key_2025_secure
 
 ### Frontend (.env)
 ```
-REACT_APP_BACKEND_URL=https://pleader-complete.preview.emergentagent.com
+REACT_APP_BACKEND_URL=https://law-helper-4.preview.emergentagent.com
 WDS_SOCKET_PORT=443
 ```
 
