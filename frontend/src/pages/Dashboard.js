@@ -563,10 +563,20 @@ const Dashboard = () => {
                   </button>
                   <button
                     type="button"
-                    className="p-2 hover:bg-gray-100 rounded"
+                    onClick={handleVoiceToggle}
+                    className={`p-2 rounded transition-colors ${
+                      isListening 
+                        ? 'bg-red-100 text-red-600 animate-pulse' 
+                        : 'hover:bg-gray-100'
+                    }`}
+                    title={isListening ? 'Stop listening' : 'Start voice typing'}
                     data-testid="voice-input-button"
                   >
-                    <Mic className="w-4 h-4 text-gray-500" />
+                    {isListening ? (
+                      <MicOff className="w-4 h-4" />
+                    ) : (
+                      <Mic className="w-4 h-4 text-gray-500" />
+                    )}
                   </button>
                 </div>
               </div>
