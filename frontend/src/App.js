@@ -10,6 +10,7 @@ import DocumentAnalysis from "./pages/DocumentAnalysis";
 import Help from "./pages/Help";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { ThemeProvider } from "./context/ThemeContext";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
