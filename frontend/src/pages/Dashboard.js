@@ -202,7 +202,7 @@ const Dashboard = () => {
           <div className="flex items-center space-x-3">
             <Avatar>
               <AvatarImage src={user?.avatar_url} />
-              <AvatarFallback className="bg-green-100 text-green-700">
+              <AvatarFallback style={{ backgroundColor: theme.primaryLight, color: theme.primary }}>
                 {user?.name?.charAt(0).toUpperCase()}
               </AvatarFallback>
             </Avatar>
