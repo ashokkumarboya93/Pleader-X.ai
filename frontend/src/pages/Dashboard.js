@@ -306,6 +306,68 @@ const Dashboard = () => {
             </h1>
           </div>
           <div className="flex items-center space-x-2">
+            {/* Response Mode Toggle */}
+            <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setResponseMode('concise')}
+                className={`px-3 py-1 text-xs rounded ${
+                  responseMode === 'concise' 
+                    ? 'bg-white shadow-sm font-medium' 
+                    : 'text-gray-600'
+                }`}
+                style={{ color: responseMode === 'concise' ? theme.primary : undefined }}
+              >
+                Concise
+              </button>
+              <button
+                onClick={() => setResponseMode('detailed')}
+                className={`px-3 py-1 text-xs rounded ${
+                  responseMode === 'detailed' 
+                    ? 'bg-white shadow-sm font-medium' 
+                    : 'text-gray-600'
+                }`}
+                style={{ color: responseMode === 'detailed' ? theme.primary : undefined }}
+              >
+                Detailed
+              </button>
+            </div>
+
+            {/* Theme Selector */}
+            <div className="relative">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowThemeSelector(!showThemeSelector)}
+                className="text-gray-600"
+              >
+                <Palette className="w-4 h-4" />
+              </Button>
+              {showThemeSelector && (
+                <div className="absolute right-0 mt-2 p-3 bg-white rounded-lg shadow-lg border border-gray-200 z-20">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Choose Theme</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {Object.keys(themes).map((themeName) => (
+                      <button
+                        key={themeName}
+                        onClick={() => {
+                          changeTheme(themeName);
+                          setShowThemeSelector(false);
+                          toast.success(`Theme changed to ${themes[themeName].name}`);
+                        }}
+                        className={`w-10 h-10 rounded-lg border-2 transition-all ${
+                          currentTheme === themeName 
+                            ? 'border-gray-900 scale-110' 
+                            : 'border-gray-200 hover:border-gray-400'
+                        }`}
+                        style={{ backgroundColor: themes[themeName].primary }}
+                        title={themes[themeName].name}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {currentChat && messages.length > 0 && (
               <div className="relative group">
                 <Button variant="ghost" size="sm" className="text-gray-600" data-testid="export-button">
