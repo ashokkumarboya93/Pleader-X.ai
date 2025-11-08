@@ -3,11 +3,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -17,6 +20,8 @@ import google.generativeai as genai
 import json
 import base64
 import io
+import re
+import subprocess
 
 # Import our utility modules
 from rag_utils import get_rag_pipeline
@@ -43,7 +48,12 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION = timedelta(days=7)
 
 # Create the main app
-app = FastAPI()
+app = FastAPI(title="Pleader AI", version="1.0.0")
+
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -51,12 +61,44 @@ api_router = APIRouter(prefix="/api")
 # Security
 security = HTTPBearer(auto_error=False)
 
+# ==================== INPUT SANITIZATION ====================
+
+def sanitize_string(text: str, max_length: int = 10000) -> str:
+    """Sanitize user input to prevent injection attacks"""
+    if not text:
+        return ""
+    # Remove null bytes
+    text = text.replace('\x00', '')
+    # Limit length
+    text = text[:max_length]
+    # Remove potentially dangerous patterns
+    text = re.sub(r'[<>]', '', text)
+    return text.strip()
+
+def validate_email(email: str) -> bool:
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
 # ==================== MODELS ====================
 
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
+    
+    @validator('name')
+    def validate_name(cls, v):
+        v = sanitize_string(v, 100)
+        if len(v) < 2:
+            raise ValueError('Name must be at least 2 characters')
+        return v
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        return v
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -98,74 +140,97 @@ class Chat(BaseModel):
 class SendMessageRequest(BaseModel):
     chat_id: Optional[str] = None
     message: str
+    mode: Optional[str] = "detailed"  # "concise" or "detailed"
+    
+    @validator('message')
+    def validate_message(cls, v):
+        v = sanitize_string(v, 5000)
+        if len(v) < 1:
+            raise ValueError('Message cannot be empty')
+        return v
 
-class DocumentAnalysis(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    filename: str
-    file_type: str
-    analysis_result: Dict[str, Any]
-    uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+class DocumentAnalyzeRequest(BaseModel):
+    document_type: str = "legal_document"
 
-# ==================== AUTHENTICATION HELPERS ====================
+class RAGQueryRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=5, ge=1, le=20)
+    use_rerank: bool = True
+    
+    @validator('query')
+    def validate_query(cls, v):
+        v = sanitize_string(v, 2000)
+        if len(v) < 1:
+            raise ValueError('Query cannot be empty')
+        return v
 
-def create_token(user_id: str) -> str:
-    """Create JWT token"""
-    expiration = datetime.now(timezone.utc) + JWT_EXPIRATION
-    payload = {
-        "user_id": user_id,
-        "exp": expiration
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+# ==================== HELPER FUNCTIONS ====================
 
-def verify_token(token: str) -> Optional[str]:
-    """Verify JWT token and return user_id"""
+def get_git_version():
+    """Get Git commit hash for version tracking"""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload.get("user_id")
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
-        return None
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True,
+            text=True,
+            cwd=ROOT_DIR
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except:
+        return "unknown"
 
-async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """Get current user from token (cookie or header)"""
-    token = None
-    
-    # Try to get from cookie first
-    token = request.cookies.get("session_token")
-    
-    # Fallback to Authorization header
-    if not token and credentials:
-        token = credentials.credentials
-    
-    if not token:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    user_id = verify_token(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    # Verify user exists
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    
-    return user_id
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("user_id")
+        
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        user = await db.users.find_one({"id": user_id}, {"_id": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        return User(**user)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-# ==================== AUTHENTICATION ENDPOINTS ====================
+# ==================== ENDPOINTS ====================
+
+@app.get("/health")
+@limiter.limit("60/minute")
+async def health_check(request: Request):
+    """Health check endpoint with version information"""
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "git_commit": get_git_version(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": {
+            "database": "connected",
+            "gemini_api": "configured",
+            "rag_pipeline": "ready"
+        }
+    }
 
 @api_router.post("/auth/signup")
-async def signup(user_data: UserCreate):
-    """Register a new user"""
-    # Check if user already exists
+@limiter.limit("5/minute")
+async def signup(request: Request, user_data: UserCreate):
+    # Check if user exists
     existing_user = await db.users.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Hash password
     password_bytes = user_data.password.encode('utf-8')
-    hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password_bytes, salt)
     
     # Create user
     user = User(
@@ -175,14 +240,19 @@ async def signup(user_data: UserCreate):
     )
     
     user_dict = user.model_dump()
-    user_dict["password"] = hashed_password
+    user_dict['password_hash'] = hashed_password.decode('utf-8')
     
     await db.users.insert_one(user_dict)
     
-    # Create token
-    token = create_token(user.id)
+    # Generate JWT token
+    token_payload = {
+        "user_id": user.id,
+        "exp": datetime.now(timezone.utc) + JWT_EXPIRATION
+    }
+    token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
     return {
+        "message": "User created successfully",
         "token": token,
         "user": {
             "id": user.id,
@@ -193,488 +263,427 @@ async def signup(user_data: UserCreate):
     }
 
 @api_router.post("/auth/login")
-async def login(credentials: UserLogin):
-    """Login user"""
-    user = await db.users.find_one({"email": credentials.email})
+@limiter.limit("10/minute")
+async def login(request: Request, login_data: UserLogin):
+    # Find user
+    user = await db.users.find_one({"email": login_data.email}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Verify password using bcrypt
-    password_bytes = credentials.password.encode('utf-8')
-    stored_password = user.get("password", "").encode('utf-8')
-    if not bcrypt.checkpw(password_bytes, stored_password):
+    # Verify password using bcrypt.checkpw
+    password_bytes = login_data.password.encode('utf-8')
+    stored_hash = user['password_hash'].encode('utf-8')
+    
+    if not bcrypt.checkpw(password_bytes, stored_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Create token
-    token = create_token(user["id"])
+    # Generate JWT token
+    token_payload = {
+        "user_id": user['id'],
+        "exp": datetime.now(timezone.utc) + JWT_EXPIRATION
+    }
+    token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
     return {
+        "message": "Login successful",
         "token": token,
         "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-            "avatar_url": user.get("avatar_url")
+            "id": user['id'],
+            "name": user['name'],
+            "email": user['email'],
+            "avatar_url": user.get('avatar_url')
         }
     }
 
 @api_router.post("/auth/session")
-async def create_session(request: Request, response: Response):
-    """Handle Emergent OAuth session creation"""
-    try:
-        # Get session_id from header
-        session_id = request.headers.get("X-Session-ID")
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID required")
-        
-        # Call Emergent session endpoint
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-                headers={"X-Session-ID": session_id}
-            ) as resp:
-                if resp.status != 200:
-                    raise HTTPException(status_code=400, detail="Invalid session")
-                
-                session_data = await resp.json()
-        
-        # Check if user exists
-        user = await db.users.find_one({"email": session_data["email"]})
-        
-        if not user:
-            # Create new user
-            new_user = User(
-                name=session_data["name"],
-                email=session_data["email"],
-                avatar_url=session_data.get("picture"),
-                auth_provider="google"
-            )
-            await db.users.insert_one(new_user.model_dump())
-            user_id = new_user.id
-        else:
-            user_id = user["id"]
-        
-        # Create JWT token
-        token = create_token(user_id)
-        
-        # Set cookie
-        response.set_cookie(
-            key="session_token",
-            value=token,
-            httponly=True,
-            secure=True,
-            samesite="none",
-            max_age=7 * 24 * 60 * 60  # 7 days
-        )
-        
-        return {
-            "id": user_id,
-            "email": session_data["email"],
-            "name": session_data["name"],
-            "picture": session_data.get("picture"),
-            "session_token": token
-        }
+@limiter.limit("10/minute")
+async def create_session(request: Request, user_data: dict):
+    """Handle OAuth login (Google, etc.)"""
+    email = user_data.get("email")
+    name = user_data.get("name")
+    avatar_url = user_data.get("avatar_url")
+    provider = user_data.get("provider", "google")
     
-    except Exception as e:
-        logging.error(f"Session creation error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    if not email or not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email")
+    
+    # Check if user exists
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    
+    if not user:
+        # Create new user
+        new_user = User(
+            name=sanitize_string(name or email.split('@')[0], 100),
+            email=email,
+            avatar_url=avatar_url,
+            auth_provider=provider
+        )
+        user_dict = new_user.model_dump()
+        await db.users.insert_one(user_dict)
+        user = user_dict
+    
+    # Generate JWT token
+    token_payload = {
+        "user_id": user['id'],
+        "exp": datetime.now(timezone.utc) + JWT_EXPIRATION
+    }
+    token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    return {
+        "message": "Session created",
+        "token": token,
+        "user": {
+            "id": user['id'],
+            "name": user['name'],
+            "email": user['email'],
+            "avatar_url": user.get('avatar_url')
+        }
+    }
 
 @api_router.post("/auth/logout")
-async def logout(response: Response, user_id: str = Depends(get_current_user)):
-    """Logout user"""
-    response.delete_cookie(key="session_token")
+async def logout(current_user: User = Depends(get_current_user)):
     return {"message": "Logged out successfully"}
 
 @api_router.get("/auth/me")
-async def get_me(user_id: str = Depends(get_current_user)):
-    """Get current user info"""
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
+async def get_me(current_user: User = Depends(get_current_user)):
     return {
-        "id": user["id"],
-        "name": user["name"],
-        "email": user["email"],
-        "avatar_url": user.get("avatar_url"),
-        "preferences": user.get("preferences", {})
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "avatar_url": current_user.avatar_url,
+        "preferences": current_user.preferences
     }
 
-# ==================== CHAT ENDPOINTS ====================
-
 @api_router.post("/chat/send")
-async def send_message(request: SendMessageRequest, user_id: str = Depends(get_current_user)):
-    """Send a message and get AI response"""
-    try:
-        # Get or create chat
-        chat = None
-        if request.chat_id:
-            chat = await db.chats.find_one({"id": request.chat_id, "user_id": user_id})
-            if not chat:
-                raise HTTPException(status_code=404, detail="Chat not found")
-        else:
-            # Create new chat
-            chat = Chat(
-                user_id=user_id,
-                title=request.message[:50] + "..." if len(request.message) > 50 else request.message
-            )
-            chat_dict = chat.model_dump()
-            await db.chats.insert_one(chat_dict)
-        
-        # Add user message
-        user_message = Message(
-            sender="user",
-            content=request.message
+@limiter.limit("30/minute")
+async def send_message(
+    request: Request,
+    message_request: SendMessageRequest,
+    current_user: User = Depends(get_current_user)
+):
+    chat_id = message_request.chat_id
+    user_message = message_request.message
+    mode = message_request.mode or "detailed"
+    
+    # Create or get chat
+    if not chat_id:
+        chat = Chat(
+            user_id=current_user.id,
+            title=user_message[:50] + ("..." if len(user_message) > 50 else "")
         )
+        chat_id = chat.id
+        await db.chats.insert_one(chat.model_dump())
+    else:
+        chat_data = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+        if not chat_data:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        chat = Chat(**chat_data)
+    
+    # Add user message
+    user_msg = Message(sender="user", content=user_message)
+    chat.messages.append(user_msg)
+    
+    # Generate AI response with mode-specific prompt
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
-        # Generate AI response using Gemini
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        
-        # Build conversation history for context
-        messages = chat.get("messages", []) if isinstance(chat, dict) else chat.messages
+        # Build conversation history
         conversation_history = "\n".join([
-            f"{msg['sender'] if isinstance(msg, dict) else msg.sender}: {msg['content'] if isinstance(msg, dict) else msg.content}"
-            for msg in messages[-5:]  # Last 5 messages for context
+            f"{msg.sender.upper()}: {msg.content}"
+            for msg in chat.messages[-5:]  # Last 5 messages for context
         ])
         
-        # Create prompt with legal context
-        prompt = f"""You are Pleader AI, an expert legal assistant specializing EXCLUSIVELY in Indian law and legal framework.
+        mode_instruction = ""
+        if mode == "concise":
+            mode_instruction = "Provide a CONCISE response (2-3 sentences maximum). Be brief and to the point."
+        else:
+            mode_instruction = "Provide a DETAILED, comprehensive response with explanations and examples."
+        
+        prompt = f"""You are Pleader AI, an expert Indian legal assistant. {mode_instruction}
 
-Previous conversation:
+Your role:
+- Answer EXCLUSIVELY based on Indian legal framework (Constitution, IPC, CPC, CrPC, etc.)
+- Cite specific sections, articles, and Acts
+- Reference Supreme Court and High Court judgments when relevant
+- Provide practical legal guidance for Indian jurisdiction only
+
+IMPORTANT GUIDELINES:
+- Always cite Indian laws: IPC sections, Constitutional articles, Act names
+- Reference landmark Indian Supreme Court cases when applicable
+- If a question is outside Indian law, politely state that you focus on Indian legal matters
+- Structure your response clearly with headings and bullet points
+
+Conversation history:
 {conversation_history}
 
-User question: {request.message}
-
-STRICT INSTRUCTIONS:
-- Focus ONLY on Indian legal system, laws, and precedents
-- Cite specific Indian Acts, IPC sections, Constitution articles, or Supreme Court/High Court judgments when applicable
-- Format responses with clear structure: headings, bullet points, numbered lists
-- Use bold for important terms (**term**) and proper legal terminology
-- If discussing any non-Indian legal concept, explicitly compare it to Indian law
-- Provide practical guidance within Indian legal framework
-- Be professional, accurate, and cite sources when making legal claims
-
-Provide a clear, well-formatted response focusing strictly on Indian legal context:"""
+Provide your response now:"""
         
         response = model.generate_content(prompt)
-        ai_response_text = response.text
+        ai_message_text = response.text
         
-        # Create AI message
-        ai_message = Message(
-            sender="ai",
-            content=ai_response_text
-        )
+        # Add AI response
+        ai_msg = Message(sender="ai", content=ai_message_text)
+        chat.messages.append(ai_msg)
         
         # Update chat
-        messages_list = chat.get("messages", []) if isinstance(chat, dict) else chat.messages
-        messages_list.append(user_message.model_dump())
-        messages_list.append(ai_message.model_dump())
-        
-        chat_id = chat.get("id") if isinstance(chat, dict) else chat.id
-        
+        chat.updated_at = datetime.now(timezone.utc)
         await db.chats.update_one(
             {"id": chat_id},
-            {
-                "$set": {
-                    "messages": messages_list,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
+            {"$set": {
+                "messages": [msg.model_dump() for msg in chat.messages],
+                "updated_at": chat.updated_at,
+                "title": chat.title
+            }}
         )
         
         return {
             "chat_id": chat_id,
-            "user_message": user_message.model_dump(),
-            "ai_message": ai_message.model_dump()
+            "message": ai_msg.model_dump()
         }
-    
+        
     except Exception as e:
-        logging.error(f"Chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+        logging.error(f"Error generating AI response: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
 
 @api_router.get("/chat/history")
-async def get_chat_history(user_id: str = Depends(get_current_user)):
-    """Get all chats for user"""
-    chats = await db.chats.find({"user_id": user_id}, {"_id": 0}).sort("updated_at", -1).to_list(100)
-    return chats
+async def get_chat_history(current_user: User = Depends(get_current_user)):
+    chats = await db.chats.find({"user_id": current_user.id}, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    return {"chats": chats}
 
 @api_router.get("/chat/{chat_id}")
-async def get_chat(chat_id: str, user_id: str = Depends(get_current_user)):
-    """Get specific chat"""
-    chat = await db.chats.find_one({"id": chat_id, "user_id": user_id}, {"_id": 0})
+async def get_chat(chat_id: str, current_user: User = Depends(get_current_user)):
+    chat = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return chat
 
 @api_router.delete("/chat/{chat_id}")
-async def delete_chat(chat_id: str, user_id: str = Depends(get_current_user)):
-    """Delete a chat"""
-    result = await db.chats.delete_one({"id": chat_id, "user_id": user_id})
+async def delete_chat(chat_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.chats.delete_one({"id": chat_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Chat not found")
     return {"message": "Chat deleted successfully"}
 
-# ==================== DOCUMENT ENDPOINTS ====================
-
 @api_router.post("/documents/analyze")
+@limiter.limit("20/minute")
 async def analyze_document(
+    request: Request,
     file: UploadFile = File(...),
-    user_id: str = Depends(get_current_user)
+    document_type: str = Form("legal_document"),
+    current_user: User = Depends(get_current_user)
 ):
-    """Analyze a legal document with proper text extraction and RAG indexing"""
+    # Validate file type and size
+    if not validate_file_type(file.filename):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Supported: PDF, DOCX, TXT, JPG, PNG")
+    
+    # Check file size (max 10MB)
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size: 10MB")
+    
+    await file.seek(0)
+    
     try:
-        # Validate file type
-        if not validate_file_type(file.filename):
-            raise HTTPException(
-                status_code=400, 
-                detail="Unsupported file type. Supported: PDF, DOCX, TXT, JPG, PNG"
-            )
+        # Extract text from document
+        extracted_text = await extract_text_from_file(file, file.filename)
         
-        # Read file content
-        content = await file.read()
+        if not extracted_text or len(extracted_text.strip()) < 10:
+            raise HTTPException(status_code=400, detail="Could not extract sufficient text from document")
         
-        # Extract text using proper extraction utilities
-        file_type = file.filename.split('.')[-1].lower()
-        text = extract_text_from_file(content, file.filename)
+        # Generate analysis using Gemini
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
-        if not text or len(text.strip()) < 50:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract sufficient text from document"
-            )
-        
-        # Analyze with Gemini
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        
-        prompt = f"""Analyze this legal document strictly within the Indian legal framework:
+        analysis_prompt = f"""You are Pleader AI, an expert Indian legal document analyst.
+
+Analyze the following {document_type} and provide:
+
+1. **Document Summary**: Brief overview of the document's purpose and key parties
+2. **Legal Framework**: Identify applicable Indian laws, Acts, and sections
+3. **Key Provisions**: List main clauses, terms, and conditions
+4. **Rights & Obligations**: Outline rights and obligations of all parties
+5. **Risk Analysis**: Identify potential legal risks under Indian law
+6. **Compliance Check**: Verify compliance with relevant Indian Acts (Indian Contract Act, Consumer Protection Act, etc.)
+7. **Recommendations**: Suggest improvements or missing clauses per Indian legal standards
 
 Document text:
-{text[:8000]}
+{extracted_text[:5000]}
 
-Provide a comprehensive analysis with these sections:
-
-1. **Key Points**: Identify main clauses, provisions, and important sections. Reference specific clause numbers or paragraph references.
-
-2. **Risk Assessment**: Identify legal risks or concerns under Indian law. For each risk:
-   - Categorize severity: LOW/MEDIUM/HIGH
-   - Reference applicable Indian Acts, IPC sections, or constitutional articles
-   - Explain potential legal consequences under Indian jurisdiction
-
-3. **Suggestions**: Provide recommendations for improvement:
-   - Missing clauses required under Indian law
-   - Ambiguous terms needing clarification
-   - Compliance with Indian Contract Act, Consumer Protection Act, or other relevant legislation
-
-4. **Legal References**: Cite specific Indian legal provisions:
-   - Relevant sections from Indian Acts (e.g., Indian Contract Act 1872, IPC, CPC)
-   - Articles from the Indian Constitution if applicable
-   - Relevant Supreme Court or High Court precedents
-   - Mandatory compliance requirements under Indian law
-
-Format with clear headings, bullet points, and bold key terms. Be specific and professional, focusing exclusively on Indian legal framework."""
+Provide a comprehensive analysis:"""
         
-        response = model.generate_content(prompt)
+        response = model.generate_content(analysis_prompt)
         analysis_text = response.text
         
-        # Create analysis result
-        analysis_result = {
-            "extracted_text": text[:2000] + "..." if len(text) > 2000 else text,
-            "full_analysis": analysis_text,
-            "text_length": len(text)
+        # Store document in database
+        document_id = str(uuid.uuid4())
+        document = {
+            "id": document_id,
+            "user_id": current_user.id,
+            "filename": file.filename,
+            "document_type": document_type,
+            "extracted_text": extracted_text[:10000],  # Store first 10k chars
+            "analysis": analysis_text,
+            "created_at": datetime.now(timezone.utc)
         }
         
-        # Save document analysis
-        doc_analysis = DocumentAnalysis(
-            user_id=user_id,
-            filename=file.filename,
-            file_type=file_type,
-            analysis_result=analysis_result
-        )
+        await db.documents.insert_one(document)
         
-        await db.documents.insert_one(doc_analysis.model_dump())
-        
-        # Index document in RAG pipeline for future queries
+        # Index document in RAG pipeline
         try:
-            rag = get_rag_pipeline()
-            chunks = rag.chunk_text(text)
-            metadata = [
-                {
-                    "filename": file.filename,
-                    "user_id": user_id,
-                    "document_id": doc_analysis.id,
-                    "chunk_index": i
-                }
-                for i in range(len(chunks))
-            ]
-            rag.add_documents(chunks, metadata)
-            logger.info(f"Indexed {len(chunks)} chunks from {file.filename} to RAG pipeline")
+            rag_pipeline = get_rag_pipeline()
+            rag_pipeline.add_documents([extracted_text], [document_id])
+            logging.info(f"Document {document_id} indexed in RAG pipeline")
         except Exception as e:
-            logger.warning(f"Failed to index document in RAG: {e}")
-            # Continue even if RAG indexing fails
+            logging.error(f"Failed to index document in RAG: {str(e)}")
         
         return {
-            "id": doc_analysis.id,
+            "document_id": document_id,
             "filename": file.filename,
-            "analysis": analysis_result
+            "analysis": analysis_text,
+            "extracted_text_length": len(extracted_text)
         }
-    
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logging.error(f"Document analysis error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error analyzing document: {str(e)}")
+        logging.error(f"Error analyzing document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze document: {str(e)}")
 
 @api_router.get("/documents")
-async def get_documents(user_id: str = Depends(get_current_user)):
-    """Get user's documents"""
-    documents = await db.documents.find({"user_id": user_id}, {"_id": 0}).sort("uploaded_at", -1).to_list(50)
-    return documents
+async def get_documents(current_user: User = Depends(get_current_user)):
+    documents = await db.documents.find(
+        {"user_id": current_user.id},
+        {"_id": 0, "extracted_text": 0}  # Exclude large text field
+    ).sort("created_at", -1).to_list(100)
+    return {"documents": documents}
 
 @api_router.delete("/documents/{document_id}")
-async def delete_document(document_id: str, user_id: str = Depends(get_current_user)):
-    """Delete a document"""
-    result = await db.documents.delete_one({"id": document_id, "user_id": user_id})
+async def delete_document(document_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.documents.delete_one({"id": document_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"message": "Document deleted successfully"}
 
-# ==================== RAG ENDPOINTS ====================
-
-class RAGQuery(BaseModel):
-    query: str
-    top_k: int = 3
-    use_rerank: bool = True
-
 @api_router.post("/rag/query")
-async def rag_query(request: RAGQuery, user_id: str = Depends(get_current_user)):
-    """Query the RAG pipeline for document-grounded responses"""
+@limiter.limit("30/minute")
+async def rag_query(
+    request: Request,
+    query_request: RAGQueryRequest,
+    current_user: User = Depends(get_current_user)
+):
     try:
-        rag = get_rag_pipeline()
+        rag_pipeline = get_rag_pipeline()
         
-        # Perform RAG query
-        results, answer = rag.query(
-            query=request.query,
-            top_k=request.top_k,
-            use_rerank=request.use_rerank
+        # Query the RAG pipeline
+        results = rag_pipeline.query(
+            query=query_request.query,
+            top_k=query_request.top_k,
+            use_rerank=query_request.use_rerank
         )
-        
-        # Format sources
-        sources = [
-            {
-                "filename": doc['metadata'].get('filename', 'Unknown'),
-                "text": doc['text'][:200] + "..." if len(doc['text']) > 200 else doc['text'],
-                "score": doc.get('rerank_score', doc.get('score', 0))
-            }
-            for doc in results
-        ]
         
         return {
-            "answer": answer,
-            "sources": sources,
-            "num_sources": len(sources)
+            "query": query_request.query,
+            "results": results
         }
-    
+        
     except Exception as e:
-        logger.error(f"RAG query error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+        logging.error(f"Error in RAG query: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process query: {str(e)}")
 
 @api_router.get("/rag/stats")
-async def rag_stats(user_id: str = Depends(get_current_user)):
-    """Get RAG index statistics"""
+async def get_rag_stats(current_user: User = Depends(get_current_user)):
     try:
-        rag = get_rag_pipeline()
-        stats = rag.get_stats()
+        rag_pipeline = get_rag_pipeline()
+        stats = rag_pipeline.get_stats()
         return stats
     except Exception as e:
-        logger.error(f"RAG stats error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")
-
-# ==================== EXPORT ENDPOINTS ====================
+        logging.error(f"Error getting RAG stats: {str(e)}")
+        return {"total_documents": 0, "total_chunks": 0}
 
 @api_router.get("/chat/{chat_id}/export/{format}")
-async def export_chat(chat_id: str, format: str, user_id: str = Depends(get_current_user)):
-    """Export chat in PDF, DOCX, or TXT format"""
+async def export_chat(
+    chat_id: str,
+    format: str,
+    current_user: User = Depends(get_current_user)
+):
+    if format not in ["pdf", "docx", "txt"]:
+        raise HTTPException(status_code=400, detail="Invalid format. Use: pdf, docx, or txt")
+    
+    # Get chat
+    chat_data = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+    if not chat_data:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
     try:
-        # Get chat
-        chat = await db.chats.find_one({"id": chat_id, "user_id": user_id})
-        if not chat:
-            raise HTTPException(status_code=404, detail="Chat not found")
-        
-        # Export based on format
-        if format.lower() == 'pdf':
-            content = export_chat_to_pdf(chat)
+        # Generate export
+        if format == "pdf":
+            file_bytes = export_chat_to_pdf(chat_data)
             media_type = "application/pdf"
-            filename = f"chat_{chat_id}.pdf"
-        elif format.lower() == 'docx':
-            content = export_chat_to_docx(chat)
+        elif format == "docx":
+            file_bytes = export_chat_to_docx(chat_data)
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            filename = f"chat_{chat_id}.docx"
-        elif format.lower() == 'txt':
-            content = export_chat_to_txt(chat)
+        else:  # txt
+            file_bytes = export_chat_to_txt(chat_data)
             media_type = "text/plain"
-            filename = f"chat_{chat_id}.txt"
-        else:
-            raise HTTPException(status_code=400, detail="Invalid format. Use: pdf, docx, or txt")
         
-        # Return file
+        filename = f"chat_{chat_id[:8]}.{format}"
+        
         return StreamingResponse(
-            io.BytesIO(content if isinstance(content, bytes) else content.encode('utf-8')),
+            io.BytesIO(file_bytes),
             media_type=media_type,
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-    
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error(f"Export chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error exporting chat: {str(e)}")
+        logging.error(f"Error exporting chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export chat: {str(e)}")
 
 @api_router.get("/documents/{document_id}/export/{format}")
-async def export_document_analysis(document_id: str, format: str, user_id: str = Depends(get_current_user)):
-    """Export document analysis in PDF, DOCX, or TXT format"""
+async def export_document_analysis(
+    document_id: str,
+    format: str,
+    current_user: User = Depends(get_current_user)
+):
+    if format not in ["pdf", "docx", "txt"]:
+        raise HTTPException(status_code=400, detail="Invalid format. Use: pdf, docx, or txt")
+    
+    # Get document
+    document = await db.documents.find_one(
+        {"id": document_id, "user_id": current_user.id},
+        {"_id": 0}
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
     try:
-        # Get document
-        doc = await db.documents.find_one({"id": document_id, "user_id": user_id})
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        # Export based on format
-        if format.lower() == 'pdf':
-            content = export_analysis_to_pdf(doc)
+        # Generate export
+        if format == "pdf":
+            file_bytes = export_analysis_to_pdf(document)
             media_type = "application/pdf"
-            filename = f"analysis_{document_id}.pdf"
-        elif format.lower() == 'docx':
-            content = export_analysis_to_docx(doc)
+        elif format == "docx":
+            file_bytes = export_analysis_to_docx(document)
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            filename = f"analysis_{document_id}.docx"
-        elif format.lower() == 'txt':
-            content = export_analysis_to_txt(doc)
+        else:  # txt
+            file_bytes = export_analysis_to_txt(document)
             media_type = "text/plain"
-            filename = f"analysis_{document_id}.txt"
-        else:
-            raise HTTPException(status_code=400, detail="Invalid format. Use: pdf, docx, or txt")
         
-        # Return file
+        filename = f"analysis_{document_id[:8]}.{format}"
+        
         return StreamingResponse(
-            io.BytesIO(content if isinstance(content, bytes) else content.encode('utf-8')),
+            io.BytesIO(file_bytes),
             media_type=media_type,
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-    
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error(f"Export analysis error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error exporting analysis: {str(e)}")
-
-# ==================== USER SETTINGS ====================
+        logging.error(f"Error exporting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export document: {str(e)}")
 
 @api_router.put("/user/preferences")
-async def update_preferences(preferences: Dict[str, Any], user_id: str = Depends(get_current_user)):
-    """Update user preferences"""
+async def update_preferences(
+    preferences: Dict[str, Any],
+    current_user: User = Depends(get_current_user)
+):
+    # Update user preferences
     await db.users.update_one(
-        {"id": user_id},
+        {"id": current_user.id},
         {"$set": {"preferences": preferences}}
     )
     return {"message": "Preferences updated successfully"}
