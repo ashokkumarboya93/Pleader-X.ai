@@ -407,23 +407,55 @@ const Dashboard = () => {
         <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages-container">
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
-              <div className="text-center max-w-md">
-                <Scale className="w-16 h-16 text-green-500 mx-auto mb-4" />
+              <div className="text-center max-w-2xl px-4">
+                <Scale className="w-16 h-16 mx-auto mb-4" style={{ color: theme.primary }} />
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome to Pleader AI</h2>
-                <p className="text-gray-600 mb-6">
-                  Your personal legal assistant. Ask me anything about Indian law, or upload documents for analysis.
+                <p className="text-gray-600 mb-4">
+                  Your personal legal assistant specializing in Indian law. Ask me anything about Indian laws, regulations, or upload documents for analysis.
                 </p>
-                <div className="grid grid-cols-2 gap-2">
+                
+                {/* Disclaimer */}
+                <div className="mb-6 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-left">
+                  <p className="text-yellow-800">
+                    <strong>⚠️ Disclaimer:</strong> This AI provides general legal information based on Indian law. 
+                    It is not a substitute for professional legal advice. For specific legal matters, please consult a qualified lawyer.
+                  </p>
+                </div>
+
+                {/* Suggested Queries */}
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Suggested Queries</h3>
+                <div className="grid grid-cols-2 gap-2 mb-4">
                   {quickPrompts.map((prompt, index) => (
                     <button
                       key={index}
                       onClick={() => setInputMessage(prompt)}
-                      className="px-4 py-2 text-sm bg-green-50 hover:bg-green-100 text-green-700 rounded-lg border border-green-200"
+                      className="px-4 py-2 text-sm rounded-lg border-2 transition-all hover:shadow-md"
+                      style={{ 
+                        backgroundColor: theme.primaryLight, 
+                        borderColor: theme.primary,
+                        color: theme.primary
+                      }}
                       data-testid={`quick-prompt-${index}`}
                     >
                       {prompt}
                     </button>
                   ))}
+                </div>
+
+                {/* Feature highlights */}
+                <div className="mt-6 grid grid-cols-3 gap-4 text-xs text-gray-500">
+                  <div className="flex flex-col items-center">
+                    <FileText className="w-5 h-5 mb-1" style={{ color: theme.primary }} />
+                    <span>Document Analysis</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <Mic className="w-5 h-5 mb-1" style={{ color: theme.primary }} />
+                    <span>Voice Typing</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <Download className="w-5 h-5 mb-1" style={{ color: theme.primary }} />
+                    <span>Export Chats</span>
+                  </div>
                 </div>
               </div>
             </div>
