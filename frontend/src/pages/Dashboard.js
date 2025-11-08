@@ -178,7 +178,7 @@ const Dashboard = () => {
         <div className="p-4 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-2">
-              <Scale className="w-6 h-6 text-green-500" />
+              <Scale className="w-6 h-6" style={{ color: theme.primary }} />
               <span className="font-bold text-gray-900">Pleader AI</span>
             </div>
             <button onClick={() => setSidebarOpen(false)} className="lg:hidden">
@@ -188,7 +188,8 @@ const Dashboard = () => {
           
           <Button
             onClick={handleNewChat}
-            className="w-full bg-green-500 hover:bg-green-600 text-white"
+            className="w-full text-white"
+            style={{ backgroundColor: theme.primary }}
             data-testid="new-chat-button"
           >
             <Plus className="w-4 h-4 mr-2" />
