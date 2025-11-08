@@ -13,10 +13,11 @@ if (token) {
 }
 
 export const chatApi = {
-  sendMessage: async (message, chatId = null) => {
+  sendMessage: async (message, chatId = null, mode = 'detailed') => {
     const response = await axios.post(`${API}/chat/send`, {
       message,
-      chat_id: chatId
+      chat_id: chatId,
+      mode
     });
     return response.data;
   },
