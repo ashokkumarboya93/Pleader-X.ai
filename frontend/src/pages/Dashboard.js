@@ -616,7 +616,8 @@ const Dashboard = () => {
               <Button
                 type="submit"
                 disabled={!inputMessage.trim() || loading}
-                className="bg-green-500 hover:bg-green-600 text-white h-12 px-6"
+                className="text-white h-12 px-6"
+                style={{ backgroundColor: theme.primary }}
                 data-testid="send-button"
               >
                 <Send className="w-5 h-5" />
