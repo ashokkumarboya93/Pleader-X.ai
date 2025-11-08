@@ -16,13 +16,24 @@ import { toast } from 'sonner';
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { theme, currentTheme, changeTheme, themes } = useTheme();
+  const { isListening, transcript, startListening, stopListening, resetTranscript, supported } = useVoiceTyping();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentChat, setCurrentChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState([]);
+  const [responseMode, setResponseMode] = useState('detailed'); // 'concise' or 'detailed'
+  const [showThemeSelector, setShowThemeSelector] = useState(false);
   const messagesEndRef = useRef(null);
+
+  // Update input with voice transcript
+  useEffect(() => {
+    if (transcript) {
+      setInputMessage(transcript);
+    }
+  }, [transcript]);
 
   useEffect(() => {
     loadChatHistory();
