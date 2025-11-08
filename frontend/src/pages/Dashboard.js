@@ -145,6 +145,19 @@ const Dashboard = () => {
     }
   };
 
+  const handleVoiceToggle = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      if (!supported) {
+        toast.error('Voice typing not supported in this browser');
+        return;
+      }
+      startListening();
+      toast.info('Listening... Speak now');
+    }
+  };
+
   const handleLogout = async () => {
     await logout();
     navigate('/login');
