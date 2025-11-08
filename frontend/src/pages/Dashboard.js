@@ -98,11 +98,12 @@ const Dashboard = () => {
     setMessages([...messages, userMessage]);
     setInputMessage('');
     setLoading(true);
+    resetTranscript(); // Clear voice transcript
 
     try {
-      const response = await chatApi.sendMessage(inputMessage, currentChat?.id);
+      const response = await chatApi.sendMessage(inputMessage, currentChat?.id, responseMode);
       
-      setMessages(prev => [...prev, response.ai_message]);
+      setMessages(prev => [...prev, response.message]);
       
       if (!currentChat) {
         setCurrentChat({ id: response.chat_id });
