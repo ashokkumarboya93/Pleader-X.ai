@@ -233,8 +233,12 @@ const Dashboard = () => {
                 key={chat.id}
                 onClick={() => handleLoadChat(chat.id)}
                 className={`flex items-center justify-between p-3 rounded-lg cursor-pointer group ${
-                  currentChat?.id === chat.id ? 'bg-green-50 border border-green-200' : 'hover:bg-gray-50'
+                  currentChat?.id === chat.id ? 'border' : 'hover:bg-gray-50'
                 }`}
+                style={currentChat?.id === chat.id ? { 
+                  backgroundColor: theme.primaryLight, 
+                  borderColor: theme.primary 
+                } : {}}
                 data-testid={`chat-item-${chat.id}`}
               >
                 <div className="flex-1 min-w-0">
