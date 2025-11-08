@@ -555,14 +555,14 @@ const Dashboard = () => {
                   <div className="flex space-x-3 max-w-3xl">
                     <Avatar>
                       <AvatarFallback className="bg-gray-200">
-                        <Scale className="w-5 h-5 text-green-600" />
+                        <Scale className="w-5 h-5" style={{ color: theme.primary }} />
                       </AvatarFallback>
                     </Avatar>
                     <div className="bg-white border border-gray-200 rounded-2xl p-4">
                       <div className="flex space-x-2">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: theme.primary }}></div>
+                        <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: theme.primary, animationDelay: '0.1s' }}></div>
+                        <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: theme.primary, animationDelay: '0.2s' }}></div>
                       </div>
                     </div>
                   </div>
