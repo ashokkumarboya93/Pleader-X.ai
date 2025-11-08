@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
+import { useVoiceTyping } from '../hooks/useVoiceTyping';
 import { chatApi } from '../utils/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { 
   Scale, Menu, X, Plus, Send, Bookmark, Copy, Download, LogOut,
-  Settings, HelpCircle, FileText, Mic, Paperclip, Trash2, Search
+  Settings, HelpCircle, FileText, Mic, MicOff, Paperclip, Trash2, Search, Palette
 } from 'lucide-react';
 import { toast } from 'sonner';
 
