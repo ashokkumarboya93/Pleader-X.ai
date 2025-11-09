@@ -664,7 +664,8 @@ async def export_document_analysis(
             file_bytes = export_analysis_to_docx(document)
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:  # txt
-            file_bytes = export_analysis_to_txt(document)
+            file_text = export_analysis_to_txt(document)
+            file_bytes = file_text.encode('utf-8')
             media_type = "text/plain"
         
         filename = f"analysis_{document_id[:8]}.{format}"
