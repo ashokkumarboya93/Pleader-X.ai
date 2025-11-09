@@ -189,6 +189,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ RAG query endpoint working correctly. Successfully queried uploaded document, returned relevant sources and grounded answers with proper scoring."
+      - working: true
+        agent: "testing"
+        comment: "✅ FIXED API RESPONSE FORMAT: Fixed RAG query endpoint to return proper response format with 'answer' and 'sources' fields instead of just 'results'. RAG pipeline working perfectly - queries indexed documents, retrieves relevant chunks using FAISS similarity search, re-ranks results, and generates grounded responses using Gemini 2.5 Pro with Indian legal context."
   
   - task: "Export functionality (PDF, DOCX, TXT)"
     implemented: true
