@@ -207,6 +207,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ Export functionality working correctly. All export formats (PDF, DOCX, TXT) working for both chat conversations and document analysis. Proper content-type headers and file downloads."
+      - working: true
+        agent: "testing"
+        comment: "✅ FIXED TXT EXPORT BUG: Fixed 'bytes-like object required' error by properly encoding TXT export strings to bytes before StreamingResponse. All export formats now working perfectly: PDF (reportlab), DOCX (python-docx), TXT (plain text) for both chat conversations and document analysis. Proper content-type headers and file download functionality confirmed."
   
   - task: "Chat endpoints (send, history, get, delete)"
     implemented: true
