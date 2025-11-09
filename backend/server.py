@@ -573,7 +573,7 @@ async def rag_query(
         rag_pipeline = get_rag_pipeline()
         
         # Query the RAG pipeline
-        results = rag_pipeline.query(
+        sources, answer = rag_pipeline.query(
             query=query_request.query,
             top_k=query_request.top_k,
             use_rerank=query_request.use_rerank
@@ -581,7 +581,8 @@ async def rag_query(
         
         return {
             "query": query_request.query,
-            "results": results
+            "answer": answer,
+            "sources": sources
         }
         
     except Exception as e:
