@@ -49,10 +49,13 @@ const Dashboard = () => {
 
   const loadChatHistory = async () => {
     try {
-      const history = await chatApi.getHistory();
-      setChatHistory(history);
+      const response = await chatApi.getHistory();
+      // Backend returns {chats: [...]} so we need to extract the chats array
+      const history = response.chats || response || [];
+      setChatHistory(Array.isArray(history) ? history : []);
     } catch (error) {
       console.error('Error loading chat history:', error);
+      setChatHistory([]);
     }
   };
 
