@@ -485,7 +485,8 @@ async def analyze_document(
     
     try:
         # Extract text from document
-        extracted_text = await extract_text_from_file(file, file.filename)
+        file_content = await file.read()
+        extracted_text = extract_text_from_file(file_content, file.filename)
         
         if not extracted_text or len(extracted_text.strip()) < 10:
             raise HTTPException(status_code=400, detail="Could not extract sufficient text from document")
