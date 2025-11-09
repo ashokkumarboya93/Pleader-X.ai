@@ -268,11 +268,11 @@ class PleaderBackendTester:
             
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, list):
+                if "chats" in data and isinstance(data["chats"], list):
                     self.log_result("chat", "Chat History", True)
                     return True
                 else:
-                    self.log_result("chat", "Chat History", False, "Response is not a list")
+                    self.log_result("chat", "Chat History", False, "Response does not contain chats list")
             else:
                 self.log_result("chat", "Chat History", False, f"Status {response.status_code}: {response.text}")
         except Exception as e:
