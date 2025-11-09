@@ -249,12 +249,12 @@ class PleaderBackendTester:
             
             if response.status_code == 200:
                 data = response.json()
-                if "chat_id" in data and "ai_message" in data:
+                if "chat_id" in data and "message" in data:
                     self.test_chat_id = data["chat_id"]
                     self.log_result("chat", "Send Message", True)
                     return True
                 else:
-                    self.log_result("chat", "Send Message", False, "Missing chat_id or ai_message in response")
+                    self.log_result("chat", "Send Message", False, "Missing chat_id or message in response")
             else:
                 self.log_result("chat", "Send Message", False, f"Status {response.status_code}: {response.text}")
         except Exception as e:
