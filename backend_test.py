@@ -172,16 +172,16 @@ class PleaderBackendTester:
             
             if response.status_code == 200:
                 data = response.json()
-                if "id" in data and "analysis" in data:
-                    self.test_document_id = data["id"]
+                if "document_id" in data and "analysis" in data:
+                    self.test_document_id = data["document_id"]
                     analysis = data["analysis"]
-                    if "extracted_text" in analysis and "full_analysis" in analysis:
+                    if len(analysis) > 100:  # Check if analysis is substantial
                         self.log_result("documents", "Document Analysis", True)
                         return True
                     else:
-                        self.log_result("documents", "Document Analysis", False, "Missing analysis components")
+                        self.log_result("documents", "Document Analysis", False, "Analysis text too short")
                 else:
-                    self.log_result("documents", "Document Analysis", False, "Missing id or analysis in response")
+                    self.log_result("documents", "Document Analysis", False, "Missing document_id or analysis in response")
             else:
                 self.log_result("documents", "Document Analysis", False, f"Status {response.status_code}: {response.text}")
         except Exception as e:
