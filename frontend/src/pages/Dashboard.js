@@ -79,7 +79,7 @@ const Dashboard = () => {
     try {
       await chatApi.deleteChat(chatId);
       toast.success('Chat deleted');
-      setChatHistory(chatHistory.filter(c => c.id !== chatId));
+      setChatHistory(Array.isArray(chatHistory) ? chatHistory.filter(c => c.id !== chatId) : []);
       if (currentChat?.id === chatId) {
         handleNewChat();
       }
