@@ -222,6 +222,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ Chat endpoints working correctly. Fixed MongoDB ObjectId serialization issue by excluding _id fields. Chat send, history, and get endpoints all working properly with Gemini 2.5 Pro."
+      - working: true
+        agent: "testing"
+        comment: "✅ ALL CHAT FUNCTIONALITY VERIFIED: Send message (creates new chat or continues existing), chat history (returns user's chats), get specific chat (retrieves chat by ID), all working perfectly. Gemini 2.0 Flash generating high-quality Indian legal responses with proper context and citations. Response format matches API expectations."
 
 frontend:
   - task: "Dashboard page with chat interface"
