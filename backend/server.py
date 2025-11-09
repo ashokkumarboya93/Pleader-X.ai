@@ -622,7 +622,8 @@ async def export_chat(
             file_bytes = export_chat_to_docx(chat_data)
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:  # txt
-            file_bytes = export_chat_to_txt(chat_data)
+            file_text = export_chat_to_txt(chat_data)
+            file_bytes = file_text.encode('utf-8')
             media_type = "text/plain"
         
         filename = f"chat_{chat_id[:8]}.{format}"
