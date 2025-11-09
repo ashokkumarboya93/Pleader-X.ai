@@ -231,7 +231,7 @@ const Dashboard = () => {
           
           <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Recent Chats</h3>
           <div className="space-y-1">
-            {chatHistory.map((chat) => (
+            {Array.isArray(chatHistory) && chatHistory.map((chat) => (
               <div
                 key={chat.id}
                 onClick={() => handleLoadChat(chat.id)}
