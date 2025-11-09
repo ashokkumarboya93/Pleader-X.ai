@@ -171,6 +171,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ Document analysis endpoint working correctly. Successfully analyzed test lease agreement, extracted text, generated legal analysis, and indexed document for RAG queries."
+      - working: true
+        agent: "testing"
+        comment: "✅ FIXED CRITICAL BUG: Fixed 'UploadFile object has no attribute decode' error by properly reading file content before passing to extract_text_from_file(). Document analysis now working perfectly - uploads TXT file, extracts text, generates comprehensive legal analysis using Gemini 2.0, and automatically indexes document in RAG pipeline for future queries."
   
   - task: "RAG query endpoint"
     implemented: true
